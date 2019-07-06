@@ -11,8 +11,9 @@ output:
 
 ## Summary
 
-The aim of this assignment is to train a machine learning algorithm to predict the quality of execution of weight lifting excercises. The data used contains a total of 160 variables, most of which are taken from several sensors on the test subjects. The outcome variable comprises 5 different levels.
-A random forest model is used for this assignment. Both in-sample and out-of-sample accuracy are very good at around 99% accuracy.
+The aim of this assignment is to train a machine learning algorithm to predict the quality of execution of weight lifting excercises. The data used contains a total of 160 variables, most of which are taken from several sensors on the test subjects. The outcome variable comprises 5 different levels. A random forest model is used for this assignment. Both in-sample and out-of-sample accuracy are very good at around 99%.
+
+**Note:** The Rmd file can be found in this github repository: [https://github.com/tkuttig/practicalml ](https://github.com/tkuttig/practicalml)
 
 ## Data
 
