@@ -13,11 +13,12 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 
 ## Summary
 
-Short description of data
-Aim of assignment
-Accuracy of results
+The aim of this assignment is to train a machine learning algorithm to predict the quality of execution of weight lifting excercises. The data used contains a total of 160 variables, most of which are taken from several sensors on the test subjects. The outcome variable comprises 5 different levels.
+A random forest model is used for this assignment. Both in-sample and out-of-sample accuracy are very good at around 99% accuracy.
 
 ## Data
+
+### Background
 
 The dataset is taken from a study by Velloso et. al (2013) on the recognition of the quality of execution of weight lifting exercises. The authors provide the following description (taken from the [Human Activity Recognition Project website](http://groupware.les.inf.puc-rio.br/har)):
 
@@ -28,6 +29,139 @@ In this work (see the paper) we first define quality of execution and investigat
 Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
 >
 Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+### Examining and Processing the Data
+
+The csv files containing the training and test data are accessed using the links provided by Coursera. Before exploring the data I split the provided dataset into a training and a test set. The model will only be trained on the training set so I can properly assess the out-of-sample prediction accuracy later on.
+
+```{r, start, cache=TRUE}
+library(tidyverse)
+library(caret)
+library(randomForest)
+library(corrplot)
+
+set.seed(672019)
+
+# training - for analysis
+pmlTraining <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", na = c("", "NA", "#DIV/0!"))
+# test - for prediction assignment
+pmlTesting <- read_csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", na = c("", "NA", "#DIV/0!"))
+
+# split data into training and test set
+inTrain  <- createDataPartition(pmlTraining$classe, p=0.75, list=FALSE)
+trainSet <- pmlTraining[inTrain, ]
+testSet  <- pmlTraining[-inTrain, ]
+```
+
+75% of the data are randomly assigned to the training set. This gives us a training set with `r dim(trainSet)[1]` and a test set with `r dim(testSet)[1]` observations.
+
+```{r, str}
+str(trainSet)
+```
+
+A first look at the data suggests that there are some variables that should be dropped before training the model, as they contain information that is not useful for predicting the quality of the workout (such as the ID in column 1, user_name, raw_timestamp, etc.). Furthermore, other variables on different sensor readings contain a lot of missing values (`NA`). Many machine learning algorithms are not made to handle variables with many missing values or very low variance, which is why such variables are oftentimes discarded.
+
+```{r, drop_vars}
+# identify columns with more than 95% missing values
+mostlyNA <- sapply(trainSet, function(x) mean(is.na(x))) > 0.95
+sum(mostlyNA==TRUE) # number of identified columns
+
+# store variables to drop in vector so they can also be dropped from the test set
+dropVars <- mostlyNA
+dropVars[1:7] <- TRUE # drop ID, user_name etc.
+
+# drop identified columns
+trainSet <- trainSet[, !dropVars]
+```
+
+After dropping variables with more than 95% missing values or which are otherwise unsuitable, we are left with `r dim(trainSet)[2]` variables, one of which is the variable `classe` that we want to predict. Using the `nearZeroVar` function from the `caret` package we can see that none of the remaining `r dim(trainSet)[2] - 1` variables seem to be problematic in terms of missing values or low variance.
+
+```{r, nzv, cache=TRUE}
+nzv <- nearZeroVar(select(trainSet, -classe), saveMetrics = TRUE)
+nzv
+```
+
+The correlation matrix below shows that some of the remaining variables are highly correlated. This could be addressed by reducing dimensionality through Principal Component Analysis should the accuracy of our model be unsatisfactory.
+
+```{r, correlation, cache=TRUE}
+corMat <- select(trainSet, -classe) %>% cor()
+corrplot(corMat, order = "FPC", method = "color", type = "lower", tl.cex = 0.7, tl.col = rgb(0, 0, 0))
+```
+
+## Model
+
+I choose the Random Forest approach to train a model due to its generally high prediction accuracy. The model is trained using all `r dim(trainSet)[2] - 1` predictors. The variable importance will be checked later on. The `trainControl` function is set to apply 5-fold cross valiation in order to find a balance between bias and variance.
+
+### Train Model
+
+```{r, train_model, cache=TRUE}
+# setup parallel processing
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+control <- trainControl(method = "cv", number = 5, verboseIter=FALSE, allowParallel = TRUE)
+model <- train(classe ~ ., data = trainSet, method = "rf", trControl = control)
+
+# shut down cluster
+stopCluster(cluster)
+registerDoSEQ()
+
+model$finalModel
+model$resample$Accuracy
+```
+
+The model has a very good in-sample performance, with an estimated error rate of 0.58% when predicting `classe`. Accordingly, the accuracy of the k-fold cross validation is around 99% for all 5 iterations.
+
+### Variable Importance
+
+```{r, var_imp}
+modelImp <- varImp(model)
+
+modelImp$importance %>%
+    as.data.frame() %>%
+    rownames_to_column() %>%
+    arrange(Overall) %>%
+    mutate(rowname = forcats::fct_inorder(rowname)) %>%
+    rename(Feature = rowname, Importance = Overall) %>%
+    ggplot() +
+    geom_col(aes(x = Feature, y = Importance, fill = Importance)) +
+    scale_fill_viridis_c(option = "D", direction = -1) +
+    coord_flip() +
+    theme_bw()
+```
+
+The plot shows that the roll, yaw and pitch measured on the belt are among the top predictors for the `classe` variable, while variables with low importance could probably be dropped from the dataset without too much of an impact on prediction accuracy.
+
+### Apply Model to Test Set
+
+Now that the model is trained and shows good in-sample accuracy it's time to apply it to the test set to check out-of-sample performance. Variables that have been dropped from the training set earlier are also dropped from the test set.
+
+```{r, test_set}
+# drop variables from test set
+testSet <- testSet[, !dropVars]
+
+# apply model to predict classe
+prediction <- predict(model, newdata = testSet)
+results <- confusionMatrix(prediction, as.factor(testSet$classe))
+results
+```
+
+The out-of-sample accuracy of the trained model is very good. The prediction accuracy lies above 99% when applied to the test set.
+
+### Prediction Quiz
+
+The model can be applied to the provided quiz test set with the following code (not run to adhere to the Coursera Honour Code).
+
+```{r, quiz_set, eval=FALSE}
+# drop variables from quiz test set
+quizSet <- pmlTesting[, !dropVars]
+
+# apply model to predict classe
+prediction2 <- predict(model, newdata = select(quizSet, -problem_id))
+data.frame(problem_id = quizSet$problem_id, prediction = prediction2)
+```
 
 ## References
 
